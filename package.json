@@ -1,0 +1,44 @@
+{
+  "name": "primeagent",
+  "private": true,
+  "version": "0.1.0",
+  "description": "PrimeAgent monorepo: cross-domain prime brokerage for AI agents on Arbitrum + Robinhood Chain. See PrimeAgent.md for the canonical spec.",
+  "workspaces": [
+    "backend",
+    "web",
+    "contracts",
+    "cli"
+  ],
+  "scripts": {
+    "dev": "bun --filter './backend' --filter './web' run dev",
+    "dev:backend": "bun --filter './backend' run dev",
+    "dev:web": "bun --filter './web' run dev",
+    "build": "bun run build:contracts && bun run build:stylus && bun --filter './backend' --filter './web' --filter './cli' run build",
+    "build:web": "bun --filter './web' run build",
+    "build:backend": "bun --filter './backend' run build",
+    "build:cli": "bun --filter './cli' run build",
+    "build:contracts": "bun --filter './contracts' run build",
+    "build:stylus": "cd stylus && cargo build --release --workspace",
+    "test": "bun run test:contracts && bun run test:stylus && bun --filter '*' run test",
+    "test:contracts": "bun --filter './contracts' run test",
+    "test:stylus": "cd stylus && cargo test --workspace",
+    "test:backend": "bun --filter './backend' run test",
+    "test:web": "bun --filter './web' run test",
+    "lint": "bun --filter '*' run lint",
+    "typecheck": "bun --filter '*' run typecheck",
+    "prisma:generate": "bun --filter './backend' run db:generate",
+    "forge:build": "bun --filter './contracts' run build",
+    "forge:test": "bun --filter './contracts' run test",
+    "forge:coverage": "bun --filter './contracts' run coverage",
+    "stylus:check": "cd stylus/margin_engine && cargo stylus check && cd ../risk_engine && cargo stylus check",
+    "stylus:test": "cd stylus && cargo test --workspace",
+    "e2e": "bun --filter './backend' run test:e2e",
+    "clean": "bun --filter '*' run clean || true"
+  },
+  "engines": {
+    "bun": ">=1.3.14",
+    "node": ">=22"
+  },
+  "packageManager": "bun@1.3.14",
+  "devDependencies": {}
+}
