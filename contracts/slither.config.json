@@ -1,0 +1,12 @@
+{
+  "filter_paths": "test/|lib/|node_modules/|script/|out/|cache/|broadcast/",
+  "exclude_dependencies": true,
+  "exclude_informational": false,
+  "exclude_low": false,
+  "exclude_medium": false,
+  "exclude_high": false,
+  "fail_on": "high",
+  "disable_color": true,
+  "json": "-",
+  "detectors_to_exclude": "naming-convention,solc-version,pragma,assembly,low-level-calls"
+}
