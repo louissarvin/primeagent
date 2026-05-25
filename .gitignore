@@ -1,0 +1,83 @@
+# Dependencies
+node_modules/
+**/node_modules/
+bun.lockb
+**/bun.lockb
+package-lock.json
+**/package-lock.json
+
+# Build artifacts
+.output/
+.tanstack/
+**/target/
+**/out/
+**/cache/
+**/broadcast/
+**/dist/
+**/build/
+**/.vercel/
+**/.vinxi/
+**/.next/
+**/.nitro/
+
+# Foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+contracts/lcov.info
+
+# Stylus
+stylus/target/
+
+# Editor
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Environment files (never commit)
+.env
+**/.env
+.env.local
+**/.env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Claude folders and config (never commit)
+.claude/
+**/.claude/
+CLAUDE.md
+**/CLAUDE.md
+
+# Memory and research
+memory/
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Screenshots and dev artifacts
+dev__*.png
+dev__*.jpg
+*.tmp
+
+# Temporary files
+*.bak
+*.orig
+
+# Prisma migrations (only schema is committed)
+**/prisma/migrations/
+
+# Foundry dependencies
+contracts/lib/
+
+# Markdown files: only the root README.md is committed
+*.md
+!/README.md
