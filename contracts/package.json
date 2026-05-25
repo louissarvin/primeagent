@@ -1,0 +1,23 @@
+{
+  "name": "@primeagent/contracts",
+  "private": true,
+  "version": "0.1.0",
+  "description": "PrimeAgent Solidity contracts (Foundry). Diamond, Factory, AgentVault, PositionNFT, ERC-7715 modules. See PrimeAgent.md section 7.",
+  "scripts": {
+    "build": "forge build --sizes",
+    "test": "forge test -vvv",
+    "test:unit": "forge test -vvv --match-path 'test/unit/**'",
+    "test:integration": "forge test -vvv --match-path 'test/integration/**'",
+    "test:fork": "FOUNDRY_PROFILE=fork forge test -vvv --match-path 'test/fork/**'",
+    "test:invariants": "FOUNDRY_PROFILE=ci forge test -vvv --match-path 'test/invariants/**'",
+    "coverage": "forge coverage --report summary --report lcov",
+    "slither": "FOUNDRY_PROFILE=slither slither . --config-file slither.config.json",
+    "clean": "forge clean",
+    "fmt": "forge fmt",
+    "fmt:check": "forge fmt --check",
+    "lint": "forge fmt --check",
+    "typecheck": "forge build --sizes",
+    "script:deploy": "forge script script/Deploy.s.sol:Deploy --broadcast --verify",
+    "script:seed-faucet": "forge script script/SeedFaucet.s.sol:SeedFaucet --broadcast"
+  }
+}
