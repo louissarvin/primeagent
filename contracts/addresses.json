@@ -1,0 +1,44 @@
+{
+  "421614": {
+    "PriceOracle": "0xb83a5ff4a33111e8b07adc843fdb2d782826dca3",
+    "PositionNFT": "0x98881c49d00b66febbfd3172f9de0f98df7ad1ff",
+    "AgentRegistry": "0xd6b09ba6821f1a8f9c6f92612ea50ec0bab82d6b",
+    "AgentVaultImpl": "0xa442d6899c38caeccee0a5a79882633b105647e0",
+    "AuditFacet": "0x3709eaca94d3aecca22d3909c4fd8d6a94bcd198",
+    "DiamondInit": "0xfc15d4bcdbee9f78ba5280aebb4edc20aa430398",
+    "DiamondCutFacet": "0xd2c8bf06f1dbe401b86915c5401e3011c5a83352",
+    "DiamondLoupeFacet": "0x85fd74ce24a9718c9d2a440bef9bf277423dfff1",
+    "V2Router": "0x70216cd97707b58fe63616887025c9cc119319d2",
+    "V3Pool": "0x7eefd5a5ffe543d0efa50f77f6299a870234a837",
+    "V3PositionManager": "0x38eb4bee7b2742c8c7d655e8bdfba23c184bb56a",
+    "RobinhoodChainAdapter": "0xda0b81354efec43f61ca4deb39d486e96eb94e33",
+    "ArbitrumOneAdapter": "0x66b73ac567f6f1f88f508d726689d5863e408a10",
+    "Paymaster": "0x9b5d6c32c8aef6da800c17af3e541cc99a0a15dc",
+    "FeeCollector": "0x23b107f751ef6c7d7480ef7df8e47919fc37c48c",
+    "EmergencyShutdown": "0x25e669d2f26442b8a7caf4d925ff7cc50dcaae4b",
+    "PreExecHook": "0x4e1deaa9a8b5eb29bf0a4dbf20b4b27464679e28",
+    "CallPolicyValidator": "0x41a6aeb880f2a56df4e94cf39e2c4f4fa9c09e35",
+    "McpAttestor": "0x6a31469e1aef69cec8466399d94456ad4555ad41",
+    "StakedValidator": "0x1de5757fea9da9d2c17fef291bc25c2b763a4b2e",
+    "Diamond": "0x56c780fcf163596b59998e737898d1055c69d69b",
+    "Factory": "0x8235890d157f7c67ed6bcd42b0c2137942b8ba38",
+    "MarginEngine": "0x43d0c3365fdf1706bd1236d14502890278bd0cd9"
+  },
+  "46630": {
+    "RhChainSwap": "0xe0E0dbe2Ec2e1107310cB5e4842F8D35AE4314B3",
+    "RhChainSwapAdmin": "0x6789e51196Ea26A159C992B70CC80453Ca6E381a",
+    "RhChainSwapAttestorSigner": "0x41c01176ab204C5fD2606Ad62eb8b071caC56ae8",
+    "USDG": "0x7E955252E15c84f5768B83c41a71F9eba181802F",
+    "TSLA": "0xC9f9c86933092BbbfFF3CCb4b105A4A94bf3Bd4E",
+    "AMZN": "0x5884aD2f920c162CFBbACc88C9C51AA75eC09E02",
+    "PLTR": "0x1FBE1a0e43594b3455993B5dE5Fd0A7A266298d0",
+    "NFLX": "0x3b8262A63d25f0477c4DDE23F83cfe22Cb768C93",
+    "AMD": "0x71178BAc73cBeb415514eB542a8995b82669778d",
+    "_meta": {
+      "rhChainSwapPreviousAddress": "0xc346333ea7Dc98FDDF752FdBd5928CE2460a8C7B",
+      "rhChainSwapRedeployedAt": "2026-06-14",
+      "rhChainSwapRedeployReason": "Blockscout verification requires solc v0.8.34+commit.80d5c536",
+      "explorer": "https://explorer.testnet.chain.robinhood.com"
+    }
+  }
+}
