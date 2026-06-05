@@ -1,0 +1,37 @@
+[package]
+name = "margin_engine"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "PrimeAgent cross-domain margin engine (Stylus). See PrimeAgent.md section 8.3."
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+stylus-sdk = { workspace = true }
+alloy-primitives = { workspace = true }
+alloy-sol-types = { workspace = true }
+quic_arithmetic = { path = "../quic_arithmetic" }
+
+[dev-dependencies]
+# stylus-test ships as a feature flag of stylus-sdk in 0.10.7.
+stylus-sdk = { workspace = true, features = ["stylus-test"] }
+
+[features]
+default = []
+export-abi = ["stylus-sdk/export-abi"]
+# `contract-client-gen` is referenced by the stylus-proc-generated `#[public]`
+# expansions in 0.10.7 even when unused; declaring it silences cfg warnings.
+contract-client-gen = []
+
+[lints.rust]
+# `deny`, not `forbid`, because the cargo-stylus bin shim in `src/main.rs`
+# must `#[no_mangle]` its `main` symbol and rustc now treats `no_mangle` as
+# an unsafe-attribute. Library code keeps `unsafe_code` forbidden via
+# `#![forbid(unsafe_code)]` at the top of `src/lib.rs`; only main.rs
+# locally `#![allow(unsafe_code)]`.
+unsafe_code = "deny"
