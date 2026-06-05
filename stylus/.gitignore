@@ -1,0 +1,5 @@
+target/
+*.wasm
+*.bin
+.cargo/
+# Note: Cargo.lock IS committed for Stylus reproducibility (do not gitignore).
