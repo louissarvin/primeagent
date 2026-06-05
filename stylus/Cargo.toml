@@ -1,0 +1,56 @@
+# Stylus Cargo workspace.
+# Source of truth: PrimeAgent.md sections 8 and 20.
+# Pins (verified 2026-06-04 in memory/primeagent_contracts_research_2026.md):
+#   stylus-sdk        = "=0.10.7"  (released 2026-05-19)
+#   alloy-primitives  = "=1.7.3"   (matches stylus-sdk workspace pin)
+#   alloy-sol-types   = "=1.7.3"
+#   openzeppelin-stylus = "=0.3.0" (released 2025-09-10)
+#   Rust              = 1.91.0     (per stylus-sdk-rs rust-toolchain.toml)
+
+[workspace]
+resolver = "2"
+members = [
+    "margin_engine",
+    "risk_engine",
+    "quic_arithmetic",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.91.0"
+license = "MIT"
+authors = ["PrimeAgent contributors"]
+repository = "https://github.com/primeagent/primeagent"
+
+[workspace.dependencies]
+# Pins verified against stylus-sdk-rs v0.10.7 Cargo.toml (alloy-primitives ^1.5.7).
+# Caret resolution picks 1.7.3 from registry; both deps must move in lockstep.
+# openzeppelin-stylus = 0.3.0 pins stylus-sdk = "=0.9.0" + alloy = "=0.8.20", so it is
+# NOT compatible with the 0.10.7 / 1.7.3 stack and is intentionally omitted here.
+# margin_engine and risk_engine do not need ERC-20/4626 primitives directly.
+stylus-sdk = "=0.10.7"
+# 2026-06-05 reality check: crates.io max for alloy-primitives / alloy-sol-types
+# is 1.6.0 as of writing (research memo claimed 1.7.3, registry says otherwise).
+# stylus-sdk 0.10.7 pins ^1.5.7 which resolves to 1.6.0; we pin exactly so the
+# Cargo.lock is reproducible across machines.
+alloy-primitives = { version = "=1.6.0", default-features = false }
+alloy-sol-types = { version = "=1.6.0", default-features = false }
+
+# Pure-Rust test deps
+proptest = "1.5.0"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+overflow-checks = false
+debug = false
+incremental = false
+
+[profile.dev]
+panic = "abort"
+
+[profile.test]
+opt-level = 1
