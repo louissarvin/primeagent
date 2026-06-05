@@ -1,0 +1,18 @@
+# Root Stylus workspace marker. Required by cargo-stylus when the cargo
+# workspace contains more than one deployable contract. Each member listed
+# here must also carry its own per-crate `Stylus.toml` so cargo-stylus
+# recognises it as deployable.
+#
+# Source: OffchainLabs/stylus-sdk-rs workspace-mode docs
+# (https://blog.arbitrum.foundation/structuring-multi-contract-stylus-projects-without-pain/).
+[workspace]
+members = ["margin_engine", "risk_engine"]
+
+# Network endpoints are passed to `cargo stylus check / deploy / verify`
+# via `--endpoint`; we keep this table empty so per-network config is
+# explicit at the CLI rather than implicit in this file.
+[workspace.networks]
+
+# Reserved for future workspace-wide contract defaults (e.g. constructor
+# args common to every deployable). Empty in v1.
+[contract]
