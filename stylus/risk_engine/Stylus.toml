@@ -1,0 +1,18 @@
+# Per-contract marker for cargo-stylus workspace mode. Required for
+# `cargo stylus check / deploy` to recognise this crate as a deployable
+# Stylus contract (vs. a plain rust lib like `quic_arithmetic`).
+#
+# Not yet deployed. Live address will land in `script/env.template`
+# under `STYLUS_RISK_ENGINE_ADDRESS` once
+# `script/init_risk_engine_arb_sepolia.sh` runs against Arbitrum Sepolia.
+[workspace]
+
+# Network table reserved for per-contract endpoints; empty so the CLI
+# argument `--endpoint` is always explicit.
+[workspace.networks]
+
+# Constructor / deployment defaults. Empty in v1: cargo-stylus deploys
+# without a constructor, and the contract is bootstrapped via the
+# `init(address)` ABI call from
+# `script/init_risk_engine_arb_sepolia.sh`.
+[contract]
