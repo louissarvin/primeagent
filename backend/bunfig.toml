@@ -1,0 +1,6 @@
+# Bun test configuration. The preload file sets the minimal env vars
+# (DATABASE_URL, JWT_SECRET) that `src/config/main-config.ts` requires
+# before any test module imports cascade into it. Without this, tests that
+# transitively pull in main-config trip the startup fatal-exit guard.
+[test]
+preload = ["./src/__tests__/setup.ts"]
