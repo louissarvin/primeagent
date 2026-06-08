@@ -1,0 +1,504 @@
+// PrimeAgent Prisma schema.
+// Source: PrimeAgent.md Section 6.4.bis (canonical schema).
+//
+// Conventions enforced across all long-lived models:
+//
+// 1. Soft-delete via `deletedAt DateTime?`. Application code MUST filter on
+//    `deletedAt: null` for live rows. Reason: backend/CLAUDE.md global rule and
+//    /Users/macbookair/.claude/rules/database.md ("Soft-delete instead of hard
+//    DELETE"). Append-only logs (Attestation, SiweNonce) intentionally omit it.
+//
+// 2. Dual-key envelope encryption for at-rest secrets (RobinhoodCredential
+//    tokens, OAuthState.codeVerifier). The `encVersion` column is the
+//    rotation marker: 1 == current master key (BACKEND_TOKEN_ENC_KEY v1),
+//    2 == next key during rotation. The HKDF-derived per-user sub-key, the
+//    12-byte AES-256-GCM nonce, and the GCM tag layout
+//    (`nonce || ciphertext || tag`) are documented in
+//    backend/src/lib/crypto.ts and PrimeAgent.md Section 9.4. Rotation
+//    cadence: 90 days or on suspected compromise.
+//
+// 3. Q96.48 fixed-point amounts are stored as Decimal(78, 0) (Postgres
+//    NUMERIC(78, 0)). 78 digits covers the full 256-bit unsigned range so a
+//    raw Q96.48 value never overflows. The .48 fractional scaling is implicit
+//    and lives in the application layer; do not interpret these columns as
+//    decimals at the DB level.
+//
+// 4. Every relationship is a real foreign key with ON DELETE CASCADE for
+//    owned data (RobinhoodCredential, OAuthState) and ON DELETE SET NULL for
+//    nullable owner references (OAuthState.userId when the OAuth flow starts
+//    pre-login).
+//
+// Env vars referenced (see PrimeAgent.md Section 11.1.bis server-only list):
+//   DATABASE_URL                       Postgres connection string
+//   BACKEND_TOKEN_ENC_KEY              32-byte AES-256-GCM root key (HKDF input)
+//
+// This file is the database-architect agent's territory; backend source
+// code under backend/src/** is NOT modified in the same wave as schema
+// changes (see backend/CLAUDE.md drop-list rules).
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "./generated"
+}
+
+// Prisma 7 removed the `url` property from datasource blocks (error P1012);
+// connection strings live in prisma/prisma.config.ts via `datasource.url`
+// and the runtime PrismaClient is constructed with `@prisma/adapter-pg`
+// against `process.env.DATABASE_URL` in backend/src/lib/prisma.ts.
+// See https://pris.ly/d/config-datasource and the backend audit memo
+// (memory/primeagent_backend_audit.md section 3) for context.
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id            String    @id @default(cuid())
+  walletAddress String    @unique
+  nonce         String? // For signature verification
+  lastSignIn    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Inverse relations (Section 6.4.bis)
+  robinhoodCredentials RobinhoodCredential[]
+  oauthStates          OAuthState[]
+}
+
+model ErrorLog {
+  id         String   @id @default(cuid())
+  errorCode  String
+  message    String
+  statusCode Int
+  stack      String?  @db.Text
+  context    String?  @db.Text
+  userId     String?
+  method     String?
+  path       String?
+  userAgent  String?  @db.Text
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([errorCode])
+  @@index([createdAt])
+}
+
+// -- New models per PrimeAgent.md Section 6.4.bis ---------------------------
+
+/// Per-user persisted Robinhood OAuth tokens. Ciphertext columns are
+/// produced by backend/src/lib/crypto.ts (AES-256-GCM, HKDF-derived sub-key
+/// per userId). `encVersion` selects between KEY_V1 / KEY_V2 during rotation.
+model RobinhoodCredential {
+  id              String    @id @default(cuid())
+  userId          String
+  provider        String    @default("robinhood")
+  accessTokenEnc  Bytes
+  refreshTokenEnc Bytes
+  nonceEnc        Bytes
+  expiresAt       DateTime
+  scope           String
+  encVersion      Int       @default(1)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider])
+  @@index([userId])
+}
+
+/// Mirror of the on-chain ERC-7715 policy state per PositionNFT tokenId.
+/// The authoritative enforcement gate remains PrimeAgentCallPolicyValidator
+/// on the ZeroDev Kernel (spec Section 7.7.bis); this table is a fast-path
+/// cache for UI queries.
+model AgentPolicy {
+  id                    String    @id @default(cuid())
+  tokenId               BigInt    @unique
+  kernelAddress         String
+  permissionContextHash Bytes
+  allowedContracts      Json
+  allowedSelectors      Json
+  maxNotionalUsdQ96     Decimal   @db.Decimal(78, 0)
+  dailyCapUsdQ96        Decimal   @db.Decimal(78, 0)
+  expiresAt             DateTime
+  grantTxHash           String
+  // Risk preset identity. Null when the policy was custom-built (i.e. the
+  // operator did not pick one of the five frozen presets, so no
+  // `presetHash` round-trips through `LibPolicy.Policy.presetHash`). When
+  // populated, the value matches a `RiskPresetId` from
+  // `src/agent/risk/presets.ts` (resolved by the indexer via the on-chain
+  // `presetHash` -> id map).
+  presetId              String?
+  // EVM chain id the policy lives on. Not nullable so downstream telemetry
+  // (validator reads, attestor broadcasts) always knows which chain to
+  // target. Default is Arbitrum Sepolia (421614) so existing rows back-fill
+  // safely on `bun db:push`; the indexer overwrites with the source-chain
+  // value when subsequent events fire.
+  chainId               Int       @default(421614)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  deletedAt             DateTime?
+
+  @@index([kernelAddress])
+  @@index([expiresAt])
+  // Composite lookup index: per-chain reads of a tokenId. The unique
+  // constraint on `tokenId` alone is preserved; this is purely an index for
+  // the `(tokenId, chainId)` access path used by the attestor + chat
+  // routes.
+  @@index([tokenId, chainId])
+}
+
+/// Append-only log of EIP-712 attestations posted by the Robinhood MCP
+/// attestor (spec Section 7.8). `nullifier` is unique to enforce replay
+/// protection at the DB layer as a defence-in-depth on top of the contract
+/// check.
+model Attestation {
+  id               String   @id @default(cuid())
+  attestationHash  Bytes    @unique
+  tokenId          BigInt
+  payloadJson      Json
+  eip712DomainHash Bytes
+  signature        Bytes
+  signer           String
+  notBefore        DateTime
+  notAfter         DateTime
+  nullifier        Bytes    @unique
+  // Wave A additions: the indexer back-fills `txHash` once StateAttested
+  // fires for the matching `nullifier`. Nullable because the row is created
+  // at sign time before broadcast. `chainId` defaults to Arbitrum Sepolia
+  // (421614); the indexer overwrites with the source chain when it lands.
+  txHash           Bytes?
+  chainId          Int      @default(421614)
+  // Wave F: L2 block number from ArbSys.arbBlockNumber() captured by the
+  // indexer when StateAttested fires. Nullable for non-Arbitrum chains or
+  // when the precompile read fails. Solidity `block.number` on Arbitrum
+  // returns the L1 block which is misleading for audit replay; the canonical
+  // L2 ordering comes from ArbSys.
+  arbBlock         BigInt?
+  createdAt        DateTime @default(now())
+
+  @@index([tokenId])
+  @@index([signer])
+  @@index([notAfter])
+  @@index([chainId, tokenId])
+}
+
+/// Short-TTL nonce store for SIWE / EIP-4361 login. One row per challenge.
+/// `consumedAt` is set on successful verification; expired rows are pruned
+/// by a sweeper (see workers/siweNonceCleanup.ts when introduced).
+model SiweNonce {
+  id         String    @id @default(cuid())
+  address    String
+  nonce      String    @unique
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([address])
+  @@index([expiresAt])
+}
+
+/// Append-only audit log of agent activity per `tokenId` (Wave E2).
+/// Every tool call, every order intent, every lifecycle transition, every
+/// risk trip, and every snapshot is persisted here. Survives a restart,
+/// satisfies EqualFi-style audit discipline, and powers
+/// `GET /api/agent/:tokenId/actions` for replay.
+///
+/// `tick` is a monotonic per-tokenId counter sourced from
+/// `RuntimeState.seq` in `runtimeStore.ts`. The seq is global per token
+/// across all event kinds, so `tick` ordering matches SSE ordering
+/// exactly. `resultHash` is set on `tool_call` rows as
+/// `keccak256(canonical(toolResult))`; links the row back to the
+/// `McpAttestor` digest for cross-surface verification.
+///
+/// Storage shape: `payload` is canonical-encoded JSON; the indexer
+/// nullifier convention applies here too (a future cross-attestor link
+/// would hash the same canonical bytes). No soft-delete: append-only.
+model AgentAction {
+  id         String   @id @default(cuid())
+  tokenId    BigInt
+  tick       Int
+  type       String
+  toolName   String?
+  symbol     String?
+  side       String?
+  qtyQ96     Decimal? @db.Decimal(78, 0)
+  reason     String?
+  payload    Json
+  resultHash Bytes?
+  arbBlock   BigInt?
+  chainId    Int      @default(421614)
+  createdAt  DateTime @default(now())
+
+  @@index([tokenId, tick])
+  @@index([tokenId, createdAt])
+  @@index([type])
+}
+
+/// Per-tick PnL snapshot for a tokenId. Append-only, used to build the
+/// dashboard sparkline + 24h PnL counter. One row per tick (every ~60s
+/// when the agent is running).
+///
+/// Storage shape: all monetary columns are Q96.48 USD stored as
+/// Decimal(78, 0) (NUMERIC(78, 0)). 78 digits covers the full 256-bit
+/// unsigned range; the .48 fractional scaling is implicit and lives in
+/// the application layer (see `backend/src/lib/units.ts`).
+///
+/// `equityUsdQ96` is the total margin-account value (cash + open
+/// mark-to-market). `realizedPnlUsdQ96` carries forward across ticks as
+/// closed-position pnl accumulates. `unrealizedPnlUsdQ96` is the
+/// open-position mark-to-market over cost basis. `freeMarginUsdQ96`
+/// and `usedMarginUsdQ96` partition equity into the portion available
+/// for new positions versus locked behind open exposure.
+///
+/// No `deletedAt`: this table is append-only, same posture as
+/// `Attestation` and `AgentAction`.
+model AgentPnlPoint {
+  id                  String   @id @default(cuid())
+  tokenId             BigInt
+  tick                Int
+  equityUsdQ96        Decimal  @db.Decimal(78, 0)
+  realizedPnlUsdQ96   Decimal  @db.Decimal(78, 0)
+  unrealizedPnlUsdQ96 Decimal  @db.Decimal(78, 0)
+  freeMarginUsdQ96    Decimal  @db.Decimal(78, 0)
+  usedMarginUsdQ96    Decimal  @db.Decimal(78, 0)
+  createdAt           DateTime @default(now())
+
+  @@index([tokenId, createdAt])
+  @@index([tokenId, tick])
+}
+
+/// ERC-8004 reputation feedback log (Feature G). One row per posted
+/// `giveFeedback` tx. `(tokenId, windowStart)` is unique so the
+/// reputationFeedback worker is naturally idempotent within its sliding
+/// hour window per agent.
+///
+/// `valueDecibel` is the int128 score passed to the registry (clipped to
+/// `[-100, 100]`); we store it as an Int because Prisma's BigInt is
+/// reserved for full uint256 columns and 100 fits cleanly.
+///
+/// `txHash` is nullable until the tx confirms; the worker writes the row
+/// at sign time and updates on receipt.
+model ReputationFeedback {
+  id           String   @id @default(cuid())
+  tokenId      BigInt
+  agentId      BigInt
+  windowStart  DateTime
+  windowEnd    DateTime
+  pnlUsdQ96    Decimal  @db.Decimal(78, 0)
+  valueDecibel Int
+  txHash       Bytes?
+  chainId      Int      @default(421614)
+  createdAt    DateTime @default(now())
+
+  @@unique([tokenId, windowStart])
+  @@index([tokenId, createdAt])
+  @@index([agentId])
+}
+
+/// Liquidation drill audit log (Feature H). One row per drill run; the
+/// state machine updates `lastPhase`, `lastEventJson`, `endedAt`,
+/// `bountyUsd` as it advances.
+///
+/// `windowSec` is the integer 1-minute bucket of `startedAt`
+/// (`floor(unixMs / 60_000)`). Paired with `tokenId` it forms a unique
+/// constraint that doubles as the cooldown gate: a second drill in the
+/// same window for the same tokenId hits a UNIQUE_VIOLATION (Prisma
+/// P2002) and is rejected before any side effects. F-05 + F-07.
+///
+/// `terminalPhase` records the terminal phase for the run (`restored`,
+/// `aborted`, or `error`) so post-mortem queries can tell completed runs
+/// from in-progress rows without parsing `lastEventJson`. F-08.
+model LiquidationDrill {
+  id            String   @id @default(cuid())
+  drillId       String   @unique
+  tokenId       BigInt
+  asset         String
+  windowSec     BigInt
+  startedAt     DateTime
+  endedAt       DateTime?
+  lastPhase     String
+  terminalPhase String?
+  lastEventJson Json
+  bountyUsd     Decimal? @db.Decimal(20, 6)
+  chainId       Int      @default(421614)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([tokenId, windowSec])
+  @@index([tokenId, createdAt])
+}
+
+// -- Wave J-Q additions (IMPLEMENTATION_PLAN_v2 section 1) -----------------
+
+/// Feature J: armed conditional directives awaiting a price trigger.
+/// Append-only-by-status: state machine `armed -> fired | cancelled | expired`.
+/// One armed directive per `(tokenId, threadId)` enforces the LangGraph
+/// thread-id correspondence to a single pending intent.
+model PendingDirective {
+  id              String    @id @default(cuid())
+  tokenId         BigInt
+  threadId        String
+  directive       String
+  decisionJson    Json
+  triggerKind     String
+  triggerSymbol   String?
+  triggerDir      String?
+  thresholdUsdQ96 Decimal   @db.Decimal(78, 0)
+  status          String    @default("armed")
+  armedAt         DateTime  @default(now())
+  expiresAt       DateTime
+  firedAt         DateTime?
+  firedTxHashes   Json?
+  cancelReason    String?
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([tokenId, threadId])
+  @@index([status, expiresAt])
+  @@index([tokenId, status])
+}
+
+/// Feature K: child-signed votes against a parent's fleet thesis. EIP-712
+/// envelope; signature verified by viem before insert. `(thesisHash,
+/// childTokenId)` unique blocks replay across devices for the same child.
+model FleetVote {
+  id            String   @id @default(cuid())
+  parentTokenId BigInt
+  childTokenId  BigInt
+  thesisHash    Bytes
+  vote          Int
+  deadline      DateTime
+  signature     Bytes
+  voterAddress  String
+  signedAt      DateTime
+  receivedAt    DateTime @default(now())
+  weightBps     Int      @default(0)
+
+  @@unique([thesisHash, childTokenId])
+  @@index([parentTokenId, thesisHash])
+  @@index([thesisHash, vote])
+}
+
+/// Feature K: parent-broadcast theses + execution idempotency sentinel.
+/// `executedTxHashes` is non-null once the quorum execute has fired,
+/// preventing a second execute call from firing the same thesis twice.
+model FleetThesis {
+  id               String   @id @default(cuid())
+  parentTokenId    BigInt
+  thesisHash       Bytes    @unique
+  body             String
+  proposedActions  Json
+  nonce            BigInt
+  deadline         DateTime
+  childTokenIds    Json
+  signerAddress    String
+  createdAt        DateTime @default(now())
+  executedAt       DateTime?
+  executedTxHashes Json?
+
+  @@unique([parentTokenId, nonce])
+  @@index([parentTokenId, createdAt])
+}
+
+/// Feature L: append-only policy revision ledger. Monotonic per-tokenId
+/// counter, idempotency via `(chainId, txHash, logIndex)` unique. Indexer
+/// writes BOTH this row and the `AgentPolicy.upsert` in the same Prisma
+/// transaction.
+model PolicyRevision {
+  id                    String   @id @default(cuid())
+  tokenId               BigInt
+  revisionNumber        Int
+  eventName             String
+  permissionContextHash Bytes
+  allowedContracts      Json
+  allowedSelectors      Json
+  maxNotionalUsdQ96     Decimal  @db.Decimal(78, 0)
+  dailyCapUsdQ96        Decimal  @db.Decimal(78, 0)
+  expiresAt             DateTime
+  presetId              String?
+  chainId               Int      @default(421614)
+  txHash                Bytes
+  blockNumber           BigInt
+  logIndex              Int
+  arbBlock              BigInt?
+  observedAt            DateTime @default(now())
+
+  @@unique([tokenId, revisionNumber])
+  @@unique([chainId, txHash, logIndex])
+  @@index([tokenId, observedAt])
+  @@index([chainId, blockNumber])
+}
+
+/// Feature M: indexed `PricePosted` events, source-of-truth for simulator
+/// replay. `(chainId, txHash, logIndex)` is the idempotency guard.
+model PricePoint {
+  id          String   @id @default(cuid())
+  asset       String
+  chainId     Int      @default(421614)
+  priceQ96    Decimal  @db.Decimal(78, 0)
+  ts          DateTime
+  k           Int
+  n           Int
+  txHash      Bytes
+  blockNumber BigInt
+  logIndex    Int
+  createdAt   DateTime @default(now())
+
+  @@unique([chainId, txHash, logIndex])
+  @@index([asset, ts])
+  @@index([chainId, blockNumber])
+}
+
+/// Feature M: cached simulation results so the dashboard can replay a
+/// computed run without re-executing the simulator loop.
+model SimulationResult {
+  id              String   @id @default(cuid())
+  tokenId         BigInt
+  strategyName    String
+  draftPolicyHash Bytes
+  windowStartIso  String
+  windowEndIso    String
+  resultJson      Json
+  computedAt      DateTime @default(now())
+
+  @@index([tokenId, computedAt])
+  @@index([draftPolicyHash])
+}
+
+/// Feature N: every fetched FX rate row, append-only audit trail. The
+/// in-process SWR cache (`src/lib/fx/cache.ts`) is the hot path; this is the
+/// audit ledger judges can point at.
+model FxRatePoint {
+  id        String   @id @default(cuid())
+  pair      String
+  rateBp    Int
+  fetchedAt DateTime
+  provider  String
+  raw       Json
+  createdAt DateTime @default(now())
+
+  @@index([pair, fetchedAt])
+  @@index([provider, fetchedAt])
+}
+
+/// Short-TTL PKCE state store for OAuth 2.1 + PKCE flows (Robinhood). The
+/// `codeVerifier` is encrypted using the same envelope as
+/// RobinhoodCredential (`encVersion` selects KEY_V1 / KEY_V2). `userId` is
+/// nullable so the OAuth flow can be started pre-login; it is filled in once
+/// the SIWE login completes (FK uses ON DELETE SET NULL).
+model OAuthState {
+  id           String    @id @default(cuid())
+  userId       String?
+  provider     String
+  codeVerifier Bytes
+  state        String    @unique
+  expiresAt    DateTime
+  consumedAt   DateTime?
+  encVersion   Int       @default(1)
+  createdAt    DateTime  @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
