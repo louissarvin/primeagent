@@ -1,0 +1,13 @@
+{
+  "account_id": "stub-acct-0001",
+  "account_value_cents": "1000000",
+  "positions": [
+    { "symbol": "TSLA", "qty": -0.20, "mark_cents": "27500" },
+    { "symbol": "AMZN", "qty": -0.25, "mark_cents": "18900" },
+    { "symbol": "PLTR", "qty": 0,     "mark_cents": "2350" },
+    { "symbol": "NFLX", "qty": 0,     "mark_cents": "84500" },
+    { "symbol": "AMD",  "qty": 0,     "mark_cents": "16800" }
+  ],
+  "buying_power_cents": "2000000",
+  "ts": 1717459200
+}
