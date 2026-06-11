@@ -1,0 +1,42 @@
+# PrimeAgent DSS Alignment Memo
+
+**Agent tokenId**: <%= it.tokenId %>
+**Generated**: <%= it.generatedAt %>
+**Firm**: <%= it.firmName %>  (LEI: <%= it.firmLei %>)
+**Evidence basis**: Audit Export PDF SHA-256 = <%= it.auditPdfSha256 ?? '(none generated)' %>
+
+## 1. Identity
+- Token ID: <%= it.tokenId %>
+- Kernel: <%= it.kernelAddress %>
+- Permission context hash: <%= it.permissionContextHash %>
+- Chain: Arbitrum Sepolia (chainId 421614)
+
+## 2. Permitted activities and limits
+- Max notional USD (Q96): <%= it.maxNotionalUsdQ96 %>
+- Daily cap USD (Q96): <%= it.dailyCapUsdQ96 %>
+- Allowed contracts: <%= it.allowedContracts %>
+- Allowed selectors: <%= it.allowedSelectors %>
+- Policy expires at: <%= it.expiresAt %>
+- Risk preset: <%= it.presetId ?? 'custom' %>
+
+## 3. State evidence
+Latest attestations (<%= it.recentAttestations.length %>):
+<% it.recentAttestations.forEach(function(att){ %>
+- <%= att.notBefore %> nullifier=<%= att.nullifier %> tx=<%= att.txHash %>
+<% }) %>
+
+## 4. Risk controls
+- Liquidation drills (last 30d): <%= it.drillCount %>
+- Reputation feedback entries: <%= it.feedbackCount %>
+- Mean valueDecibel: <%= it.meanDecibel %>
+
+## 5. Audit trail
+Full per-event audit is the PDF at SHA-256 `<%= it.auditPdfSha256 ?? '(none generated)' %>`.
+Re-generating the PDF over the same date range and the same database rows MUST reproduce
+this hash byte-for-byte; if it does not, the underlying records have been modified.
+
+## 6. Gate 2 mapping
+- Governance: see firm Gate 1 submission (cross-reference; not auto-populated).
+- Operational resilience: see drill log in section 4.
+- Custody arrangements: kernel address in section 1.
+- Conflicts of interest: single-firm operator; update if multi-tenant.
