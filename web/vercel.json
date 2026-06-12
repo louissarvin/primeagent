@@ -1,0 +1,33 @@
+{
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' https://*.zerodev.app https://*.walletconnect.com https://*.walletconnect.org wss://*.walletconnect.com wss://*.walletconnect.org https://*.arbitrum.io https://*.alchemy.com https://*.rainbow.me https://rpc.testnet.chain.robinhood.com https://api.anthropic.com https://agent.robinhood.com https://smith.langchain.com https://api.frankfurter.dev https://api.coinbase.com https://www.bankofengland.co.uk http://localhost:3700 http://localhost:3200 ws://localhost:3700; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-src 'self' https://*.zerodev.app https://*.walletconnect.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+        },
+        {
+          "key": "Strict-Transport-Security",
+          "value": "max-age=63072000; includeSubDomains; preload"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(), microphone=(), geolocation=(), payment=(), interest-cohort=()"
+        }
+      ]
+    }
+  ]
+}
