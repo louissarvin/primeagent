@@ -1,0 +1,528 @@
+@import "tailwindcss";
+@import "@heroui/styles";
+@import "@fontsource-variable/inter";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/700.css";
+
+/* Class-based dark mode — HeroUI v3 pattern.
+ * The @custom-variant directive tells Tailwind v4 to generate
+ * dark: utility variants scoped to the .dark class on <html>.
+ * This is the only registration step required for HeroUI v3;
+ * no HeroUIProvider or tailwind.config.ts needed.
+ * Source: DESIGN.md §8.2 + PALETTE.md + CLAUDE.md open risk 3.
+ */
+@custom-variant dark (&:is(.dark *));
+
+/* Mayfair After Dark — canonical Tailwind v4 token block.
+ * Source: PALETTE.md §"Tailwind v4 CSS-first config".
+ * These map 1:1 to semantic Tailwind utilities:
+ *   bg-canvas, bg-surface, bg-elevated
+ *   text-fg, text-fg-muted, text-fg-subtle, text-fg-disabled
+ *   text-brand, bg-brand, border-brand
+ *   text-up, text-down, text-warning, text-info, text-live
+ *   border-border-subtle, border-border, border-border-strong
+ */
+@theme {
+  /* surfaces */
+  --color-canvas: #0a0a0b;
+  --color-surface: #131316;
+  --color-elevated: #1c1c20;
+
+  /* foreground */
+  --color-fg: #fafafa;
+  --color-fg-muted: #a1a1aa;
+  --color-fg-subtle: #71717a;
+  --color-fg-disabled: #52525b;
+
+  /* brand */
+  --color-brand: #f5a524;
+  --color-brand-soft: #fbc366;
+  --color-brand-deep: #a86f0f;
+
+  /* semantic */
+  --color-up: #16c784;
+  --color-down: #ea3943;
+  --color-warning: #ff9800;
+  --color-info: #3b82f6;
+  --color-live: #4af6c3;
+
+  /* borders */
+  --color-border-subtle: #27272a;
+  --color-border: #3f3f46;
+  --color-border-strong: #52525b;
+
+  /* shadows */
+  --shadow-glow-brand: 0 0 0 3px rgba(245, 165, 36, 0.18);
+  --shadow-glow-up: 0 0 0 3px rgba(22, 199, 132, 0.18);
+  --shadow-glow-down: 0 0 0 3px rgba(234, 57, 67, 0.18);
+
+  /* fonts */
+  --font-display: "Inter Display", "Inter", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Dark-first base.
+ * color-scheme: dark tells the browser to use dark scrollbars, input
+ * backgrounds, and system UI elements by default.
+ * No dark: prefix variants anywhere in this codebase — dark IS the base.
+ */
+:root {
+  color-scheme: dark;
+  background: var(--color-canvas);
+  color: var(--color-fg);
+}
+
+/* HeroUI v3 dark theme override.
+ * HeroUI v3 reads its own --accent, --background, --foreground etc.
+ * variables. We map them to our PALETTE tokens so HeroUI components
+ * (Button, Modal, Switch, Input) respect the Mayfair After Dark brand.
+ *
+ * Variable names are HeroUI v3 internals (not --heroui-* prefixed).
+ * Source: node_modules/@heroui/styles/dist/themes/default/variables.css
+ *
+ * oklch(0.7589 0.157 75.5) = #F5A524 amber (verified via Tailwind v4 oklch refs)
+ * oklch(0.05 0.005 285.823) = #0A0A0B canvas
+ */
+@layer base {
+  .dark {
+    --accent: oklch(0.7589 0.157 75.5);
+    --accent-foreground: oklch(0.05 0.005 285.823);
+    --success: oklch(0.7329 0.1935 150.81);
+    --warning: oklch(0.7819 0.1585 72.33);
+    --danger: oklch(0.6532 0.2328 25.74);
+    --background: oklch(0.05 0.005 285.823);
+    --foreground: oklch(0.985 0 0);
+  }
+}
+
+/* Global typography defaults.
+ * Tight tracking (-0.01em) is mandated by primeWebTask.md and DESIGN.md §4.2.
+ * At display sizes, components tighten to -0.02em via the .t-hero class.
+ */
+@layer base {
+  html {
+    letter-spacing: -0.01em;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    font-family: var(--font-body);
+    background: var(--color-canvas);
+    color: var(--color-fg);
+  }
+
+  code,
+  pre,
+  .font-mono {
+    font-family: var(--font-mono);
+  }
+
+  /* Scrollbar — dark substrate */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: var(--color-canvas);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-border-strong);
+  }
+}
+
+/* Selection */
+::selection {
+  background: rgba(245, 165, 36, 0.18);
+  color: var(--color-fg);
+}
+
+/* Agent heartbeat pulse — cyan live data indicator.
+ * Source: DESIGN.md §6.3. Linear-inherited 6px dot pattern.
+ * Must use --color-live (#4AF6C3), not green or pink.
+ */
+@keyframes primeagent-pulse {
+  0%   { transform: scale(1);    opacity: 0.40; }
+  50%  { transform: scale(1.35); opacity: 1.00; }
+  100% { transform: scale(1);    opacity: 0.40; }
+}
+
+.primeagent-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-live);
+  animation: primeagent-pulse 1600ms linear infinite;
+}
+
+/* OffChainModeBadge — one-shot pulse for the first 5 seconds after load.
+ * Draws attention to the badge briefly; stops via JS removing the class.
+ * Uses fg-subtle colour, not live-cyan — informational, not a live signal.
+ */
+@keyframes badge-pulse {
+  0%   { opacity: 0.4; transform: scale(1); }
+  50%  { opacity: 1;   transform: scale(1.5); }
+  100% { opacity: 0.4; transform: scale(1); }
+}
+
+.badge-pulse {
+  animation: badge-pulse 1200ms ease-in-out infinite;
+}
+
+/* Easing variable for motion/react usage.
+ * DESIGN.md §6.2: one easing curve, no exceptions.
+ */
+:root {
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 320ms;
+}
+
+/* Focus ring — amber glow per DESIGN.md §5.3 */
+@layer utilities {
+  .focus-ring {
+    outline: none;
+    box-shadow: var(--shadow-glow-brand);
+  }
+}
+
+/* Attestation settle flash — amber halo 250ms, DESIGN.md §6.4
+ * Applied as .attest-flash on a <tr> when a StateAttested chain event arrives.
+ * CSS animation instead of motion.tr to avoid SSR hydration issues with
+ * motion components on table elements.
+ */
+@keyframes attest-flash {
+  0%   { background-color: rgba(245, 165, 36, 0.18); }
+  100% { background-color: transparent; }
+}
+
+.attest-flash {
+  animation: attest-flash 250ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Action log row entrance — new events slide in from above.
+ * DESIGN.md §6.7: 180ms ease-out, opacity+blur+y.
+ */
+@keyframes row-enter {
+  0%   { opacity: 0; transform: translateY(-4px); filter: blur(4px); }
+  100% { opacity: 1; transform: translateY(0);    filter: blur(0); }
+}
+
+.row-enter {
+  animation: row-enter 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ── Wave 4 additions ───────────────────────────────────────────── */
+
+/* prime-caret-blink — terminal cursor on the prime> CLI hint.
+ * Reference: floelabs.xyz pillCaretBlink. INSPIRATION.md §4 delta 3.
+ * steps(2, end) produces a hard-switch blink (on/off), not a sine wave.
+ * Hidden on mobile via hidden md:inline-block on the host element.
+ */
+@keyframes prime-caret-blink {
+  0%   { opacity: 0.06; }
+  50%  { opacity: 1.0;  }
+  100% { opacity: 0.06; }
+}
+
+.prime-caret {
+  animation: prime-caret-blink 1200ms steps(2, end) infinite;
+  color: var(--color-fg-subtle);
+  margin-left: 1px;
+  font-family: var(--font-mono);
+}
+
+/* numchip-pulse — number chip flickers briefly on value update.
+ * Reference: jpeg.fun numchip-pulse. INSPIRATION.md §4 delta 4.
+ * Duration 120ms ease-out. Applied via data-pulse="true" attribute.
+ */
+@keyframes numchip-pulse {
+  0%   { transform: scale(1);    opacity: 1;   }
+  30%  { transform: scale(0.97); opacity: 0.6; }
+  100% { transform: scale(1);    opacity: 1;   }
+}
+
+.num-chip[data-pulse="true"] {
+  animation: numchip-pulse 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* prime-orbit — slow ambient ring behind CrossDomainDiagram.
+ * Reference: opaldex ring-spin. INSPIRATION.md §4 delta 5.
+ * 20s rotation, gated behind prefers-reduced-motion.
+ */
+@keyframes prime-orbit {
+  from { transform: rotate(0deg);   }
+  to   { transform: rotate(360deg); }
+}
+
+.orbit-ring {
+  animation: prime-orbit 20000ms linear infinite;
+  transform-origin: center;
+  opacity: 0.12;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prime-caret,
+  .orbit-ring {
+    animation: none;
+  }
+  .num-chip[data-pulse="true"] {
+    animation: none;
+  }
+}
+
+/* ── Wave 5 additions ───────────────────────────────────────────── */
+
+/* scroll-x — asset ticker marquee loop.
+ * Translates left by 50% (the track is doubled for seamless loop).
+ * Duration 28s — slow enough to read individual symbols comfortably.
+ * Pauses on hover via CSS animation-play-state.
+ * Gated behind prefers-reduced-motion.
+ * Reference: web/web/src/routes/index.tsx marquee ticker. DESIGN.md §6.9.
+ */
+@keyframes scroll-x {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+.asset-ticker-track {
+  animation: scroll-x 28s linear infinite;
+}
+
+.asset-ticker-track:hover,
+*:hover > .asset-ticker-track {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .asset-ticker-track {
+    animation: none;
+  }
+}
+
+/* scroll-progress-bar — amber fill that tracks page scroll depth.
+ * Uses CSS scroll-timeline (supported: Chrome 115+, Firefox 110+, Safari 18+).
+ * For older browsers this falls back gracefully — the bar simply stays empty.
+ * 2px height, full-width, fixed at top of viewport above the header.
+ * Reference: recommended delta from Wave 5 brief. DESIGN.md §6.9 (no JS scroll).
+ */
+@keyframes scroll-progress {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+
+.scroll-progress-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--color-brand);
+  transform-origin: left center;
+  transform: scaleX(0);
+  z-index: 60;
+
+  /* scroll-timeline: not in @keyframes — this is the property that drives it */
+  animation: scroll-progress linear both;
+  animation-timeline: scroll(root block);
+  animation-range: 0% 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scroll-progress-bar {
+    display: none;
+  }
+}
+
+/* hero-mask-reveal — used for h1 lines on the landing hero.
+ * Each line slides up from behind a clip-path mask.
+ * The parent line wrapper must have overflow: hidden.
+ * DESIGN.md §6: entrance-only, ease-out, under 400ms.
+ * Reference: web/web/src/routes/index.tsx SplitTextEntrance.
+ */
+@keyframes hero-mask-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.hero-line-mask {
+  overflow: hidden;
+  display: block;
+}
+
+.hero-line-inner {
+  display: block;
+  animation: hero-mask-reveal 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-line-inner {
+    animation: none;
+  }
+}
+
+/* ── Wave 6 additions ───────────────────────────────────────────── */
+
+/* glow-breathe — subtle ambient scale pulse on the parallax hero glow.
+ * Scales 1.0 → 1.05 → 1.0 over 8s. Gentle enough to not distract from
+ * the headline. Applied via .glow-breathe class on the motion.div.
+ * Gated behind prefers-reduced-motion.
+ * Reference: web/web/src/routes/index.tsx parallax glow pattern (Wave 6).
+ */
+@keyframes glow-breathe {
+  0%   { transform: scale(1); }
+  50%  { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+
+.glow-breathe {
+  animation: glow-breathe 8s ease-in-out infinite;
+  transform-origin: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glow-breathe {
+    animation: none;
+  }
+}
+
+/* ── Wave 7 additions ───────────────────────────────────────────── */
+
+/* primeagent-float-gentle — slow 4px Y oscillation for the diagram container.
+ * Applied to CrossDomainDiagram wrapper div. Pauses on hover.
+ * Reference: BreakBase float-gentle. Reduced from 12px to 4px for restraint.
+ * Duration 6s, reduced from BreakBase's 6s matching our glow-breathe cadence.
+ */
+@keyframes primeagent-float-gentle {
+  0%,  100% { transform: translateY(0px); }
+  50%        { transform: translateY(-4px); }
+}
+
+.float-gentle {
+  animation: primeagent-float-gentle 6s ease-in-out infinite;
+}
+
+.float-gentle:hover {
+  animation-play-state: paused;
+}
+
+/* primeagent-text-wipe-reveal — clip-path left-to-right reveal.
+ * Applied to ScrollRevealText heading spans.
+ * 600ms cubic-bezier(0.16, 1, 0.3, 1). forwards: stays fully revealed.
+ * Reference: BreakBase textWipeReveal keyframe.
+ */
+@keyframes primeagent-text-wipe-reveal {
+  from { clip-path: inset(0 100% 0 0); }
+  to   { clip-path: inset(0 0% 0 0);   }
+}
+
+/* primeagent-skeleton-sweep — left-to-right gradient mask on skeleton bars.
+ * 2s ease-in-out infinite. Applied via .skeleton-sweep utility class.
+ * More institutional than Tailwind's default animate-pulse (opacity only).
+ * Reference: BreakBase skeleton-sweep keyframe.
+ */
+@keyframes primeagent-skeleton-sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(300%);  }
+}
+
+.skeleton-sweep {
+  position: relative;
+  overflow: hidden;
+}
+
+.skeleton-sweep::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(250, 250, 250, 0.05) 50%,
+    transparent 100%
+  );
+  animation: primeagent-skeleton-sweep 2s ease-in-out infinite;
+}
+
+/* primeagent-accent-pulse — opacity pulse for amber accent indicators.
+ * Applied to the "Live on Arbitrum Sepolia" pill dot.
+ * 1800ms ease-in-out infinite. Low intensity: 0.4 → 1.0 → 0.4.
+ * Reference: BreakBase accent-pulse keyframe, adapted for amber.
+ */
+@keyframes primeagent-accent-pulse {
+  0%,  100% { opacity: 0.4; }
+  50%        { opacity: 1.0; }
+}
+
+.accent-pulse-dot {
+  animation: primeagent-accent-pulse 1800ms ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* All four Wave 7 animations are already defined above.
+   * This block is intentionally empty — the guard is on the
+   * reduce side (below), not the no-preference side. */
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .float-gentle,
+  .accent-pulse-dot {
+    animation: none;
+  }
+  .skeleton-sweep::after {
+    animation: none;
+  }
+}
+
+/* ── Wave 8 — PnlCard additions ─────────────────────────────────────────── */
+
+/* pnl-dot-flash — sparkline last-point dot pulses on each pnl_update SSE event.
+ * 800ms single-shot. Scales out from 1x to 2x and fades.
+ * Reference: DESIGN.md §6.3 live indicator pattern.
+ */
+@keyframes pnl-dot-flash {
+  0%   { transform: scale(1);   opacity: 1;   }
+  50%  { transform: scale(2.5); opacity: 0.6; }
+  100% { transform: scale(1);   opacity: 1;   }
+}
+
+.pnl-dot-pulse {
+  animation: pnl-dot-flash 800ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* pnl-live-flash — live indicator dot accelerates to 800ms for one cycle
+ * then falls back to the base primeagent-pulse class (set by JS timeout).
+ * DESIGN.md §6.3: "pulse briefly accelerates to 800ms for one cycle".
+ */
+@keyframes pnl-live-flash {
+  0%   { transform: scale(1);    opacity: 0.40; }
+  50%  { transform: scale(1.35); opacity: 1.00; }
+  100% { transform: scale(1);    opacity: 0.40; }
+}
+
+.pnl-live-flash {
+  animation: pnl-live-flash 800ms linear 1 forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pnl-dot-pulse,
+  .pnl-live-flash {
+    animation: none;
+  }
+}
