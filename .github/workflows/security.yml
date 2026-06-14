@@ -1,0 +1,154 @@
+name: security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+env:
+  FOUNDRY_PROFILE: ci
+
+jobs:
+  slither:
+    name: Slither static analysis
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+          cache: true
+
+      - name: Forge build (for Slither artifacts)
+        run: forge build --skip test script
+
+      - name: Run Slither
+        id: slither
+        uses: crytic/slither-action@v0.4.2
+        continue-on-error: true
+        with:
+          target: contracts/
+          slither-config: contracts/slither.config.json
+          slither-version: 0.11.4
+          fail-on: high
+          sarif: results.sarif
+          ignore-compile: true
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: contracts/results.sarif
+          category: slither
+
+      - name: Fail on high severity
+        if: steps.slither.outcome == 'failure'
+        run: |
+          echo "Slither reported high-severity findings. See SARIF upload and job log."
+          exit 1
+
+  mythril:
+    name: Mythril symbolic execution
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: contracts
+    strategy:
+      fail-fast: false
+      matrix:
+        contract:
+          - src/core/PrimeAgentFactory.sol
+          - src/core/PrimeAgentDiamond.sol
+          - src/core/AgentVault.sol
+          - src/core/AgentRegistry.sol
+          - src/modules/RobinhoodMcpAttestor.sol
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install Mythril and solc-select
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install mythril solc-select
+          solc-select install 0.8.35
+          solc-select use 0.8.35
+
+      - name: Install Foundry (for remappings resolution)
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Resolve remappings
+        id: remap
+        run: |
+          REMAP=$(tr '\n' ' ' < remappings.txt | sed 's/#.*$//')
+          echo "remappings=$REMAP" >> "$GITHUB_OUTPUT"
+
+      - name: Run Mythril on ${{ matrix.contract }}
+        id: myth
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          myth analyze "${{ matrix.contract }}" \
+            --solv 0.8.35 \
+            --execution-timeout 540 \
+            --solver-timeout 30000 \
+            --max-depth 32 \
+            -o markdown \
+            --solc-args "--via-ir --optimize --optimize-runs 200 --evm-version cancun --allow-paths . ${{ steps.remap.outputs.remappings }}" \
+            | tee "myth-$(basename ${{ matrix.contract }} .sol).md"
+
+      - name: Upload Mythril report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mythril-${{ strategy.job-index }}
+          path: contracts/myth-*.md
+          if-no-files-found: ignore
+
+      - name: Append to job summary
+        if: always()
+        run: |
+          {
+            echo "### Mythril: ${{ matrix.contract }}"
+            echo ""
+            echo '```'
+            tail -n 200 "myth-$(basename ${{ matrix.contract }} .sol).md" 2>/dev/null || echo "no report produced"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail job on Mythril errors
+        if: steps.myth.outcome == 'failure'
+        run: |
+          echo "Mythril returned a non-zero exit code for ${{ matrix.contract }}."
+          exit 1

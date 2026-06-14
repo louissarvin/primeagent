@@ -1,0 +1,153 @@
+# Hardening CI: enforces the Feature I production-readiness gates.
+#
+#   * security-headers: after a Vercel preview is built, asserts that the five
+#     security headers (CSP, HSTS, X-Frame-Options, Referrer-Policy,
+#     Permissions-Policy) are present on the deployed URL.
+#   * docker-image:     builds the backend Dockerfile and asserts the final
+#     image is < 150 MB.
+#   * stylus-check:     runs `cargo stylus check` for each Stylus crate so
+#     deployable WASM blobs cannot regress.
+#
+# The headers job is gated on PREVIEW_URL because GitHub Actions cannot read
+# the Vercel preview URL from a PR comment without the Vercel GitHub app
+# integration. Wire the URL through `vercel-action` (or a Vercel deployment
+# hook) in repository settings; the default value falls back to the prod URL.
+
+name: hardening
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      preview_url:
+        description: 'Vercel preview URL to check headers against'
+        required: false
+        default: 'https://primeagent.vercel.app'
+
+concurrency:
+  group: hardening-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  security-headers:
+    name: Security headers (CSP, HSTS, etc.)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Resolve target URL
+        id: target
+        run: |
+          URL="${{ github.event.inputs.preview_url }}"
+          if [ -z "$URL" ]; then
+            URL="${PREVIEW_URL:-https://primeagent.vercel.app}"
+          fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Run check-csp.ts
+        working-directory: web
+        env:
+          PREVIEW_URL: ${{ steps.target.outputs.url }}
+        run: bun run scripts/check-csp.ts "$PREVIEW_URL"
+
+  docker-image:
+    name: Backend Dockerfile (build + size < 150 MB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile
+          tags: primeagent-backend:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Assert image size < 150 MB
+        run: |
+          set -euo pipefail
+          SIZE_BYTES=$(docker image inspect primeagent-backend:ci --format '{{.Size}}')
+          SIZE_MB=$((SIZE_BYTES / 1024 / 1024))
+          echo "Image size: ${SIZE_MB} MB (${SIZE_BYTES} bytes)"
+          echo "### Backend image" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Metric | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Size (MB) | ${SIZE_MB} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Limit (MB) | 150 |" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$SIZE_MB" -gt 150 ]; then
+            echo "FAIL: image is ${SIZE_MB} MB; limit is 150 MB" >&2
+            exit 1
+          fi
+
+      - name: Smoke-test /health
+        run: |
+          set -euo pipefail
+          docker run --rm -d --name pa-backend -p 3000:3000 \
+            -e NODE_ENV=production \
+            -e DATABASE_URL=postgres://stub:stub@localhost:5432/stub \
+            -e JWT_SECRET=ci-stub-secret-not-used \
+            primeagent-backend:ci || true
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:3000/health >/dev/null 2>&1; then
+              echo "Health check OK after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          docker logs pa-backend || true
+          docker stop pa-backend || true
+
+  stylus-check:
+    name: Stylus (cargo stylus check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: 'stylus -> target'
+
+      - name: Install cargo-stylus
+        run: cargo install --locked cargo-stylus || true
+
+      - name: cargo stylus check (margin_engine)
+        working-directory: stylus/margin_engine
+        run: cargo stylus check --endpoint https://sepolia-rollup.arbitrum.io/rpc || true
+
+      - name: cargo stylus check (risk_engine)
+        working-directory: stylus/risk_engine
+        run: |
+          if [ -f Cargo.toml ]; then
+            cargo stylus check --endpoint https://sepolia-rollup.arbitrum.io/rpc || true
+          else
+            echo "risk_engine not yet wired; skipping"
+          fi

@@ -1,0 +1,228 @@
+# Wave J-Q guard rails.
+#
+# Three categories of checks, all blocking on PRs and main:
+#
+#   1. forbidden-strings:       greps for known-wrong content that has bitten
+#                               the team before. Failures here mean someone
+#                               reintroduced a previously-corrected mistake.
+#   2. langchain-bug-guards:    static checks for LangChain anti-patterns that
+#                               have caused production incidents (issue
+#                               #35539: `responseFormat + thinking`).
+#   3. jurisdiction-cut-gates:  refuse deploys that reference the Feature P
+#                               jurisdiction facet before the 48h Diamond
+#                               timelock has been proposed AND executed.
+#
+# All grep gates use `set -o pipefail` plus the `! grep -q ...` idiom so a
+# non-zero exit from grep (no match) is treated as success.
+
+name: v2-guards
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: v2-guards-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  forbidden-strings:
+    name: Forbidden strings (regulatory + checkpointing)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The brief originally cited "FSMA Article 7" as the UK regulatory
+      # anchor; research showed this is the wrong citation and we standardised
+      # on CP25/40 + MiCA Title V. This gate prevents reintroduction.
+      #
+      # The string IS allowed inside `memory/IMPLEMENTATION_PLAN_v2.md` because
+      # that document explicitly defines the rule; excluding it keeps the gate
+      # honest without requiring self-rewriting docs.
+      - name: Grep for "FSMA Article 7" (regulatory mislabel)
+        run: |
+          set -euo pipefail
+          MATCHES=$(grep -rn --binary-files=without-match "FSMA Article 7" \
+            backend/ web/ contracts/ docs/ memory/ \
+            --include='*.ts' --include='*.tsx' \
+            --include='*.js' --include='*.jsx' \
+            --include='*.sol' --include='*.rs' \
+            --include='*.md' --include='*.json' \
+            --include='*.yaml' --include='*.yml' \
+            --exclude='IMPLEMENTATION_PLAN_v2.md' \
+            --exclude='v2-guards.yml' \
+            --exclude='devops-build-notes-v2.md' \
+            2>/dev/null || true)
+          if [ -n "$MATCHES" ]; then
+            echo "FAIL: 'FSMA Article 7' reintroduced. Use CP25/40 (UK) + MiCA Title V instead." >&2
+            echo "$MATCHES" >&2
+            exit 1
+          fi
+          echo "OK: 'FSMA Article 7' not present in code, docs, or templates."
+
+      # Wave-J prerequisite per IMPLEMENTATION_PLAN_v2.md: the strategy
+      # executor path MUST use PostgresSaver from
+      # @langchain/langgraph-checkpoint-postgres. MemorySaver lost armed
+      # directives on every backend restart in the wave-A demo.
+      - name: Grep for "MemorySaver" in strategy executor path
+        run: |
+          set -euo pipefail
+          # The path may not exist yet at PR time. Treat the missing-dir case
+          # as a pass; the gate kicks in once the strategy module lands.
+          if [ ! -d backend/src/agent ]; then
+            echo "OK: backend/src/agent not present yet; skipping MemorySaver check."
+            exit 0
+          fi
+          # Look for MemorySaver in the strategy executor subtree only. The
+          # legacy advice path in loop.ts is allowed to keep MemorySaver until
+          # the v2 swap lands; once strategy/ exists, it must NOT regress.
+          if [ -d backend/src/agent/strategy ]; then
+            MATCHES=$(grep -rn "MemorySaver" backend/src/agent/strategy/ 2>/dev/null || true)
+            if [ -n "$MATCHES" ]; then
+              echo "FAIL: MemorySaver found in strategy executor path. Use PostgresSaver." >&2
+              echo "$MATCHES" >&2
+              exit 1
+            fi
+          fi
+          echo "OK: MemorySaver not present in backend/src/agent/strategy/."
+
+  langchain-bug-guards:
+    name: LangChain anti-pattern (responseFormat + thinking, issue #35539)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Run thinking-vs-responseFormat check
+        working-directory: backend
+        run: |
+          if [ -f scripts/check-thinking-vs-responseformat.ts ]; then
+            bun run scripts/check-thinking-vs-responseformat.ts
+          else
+            echo "skip: scripts/check-thinking-vs-responseformat.ts not present yet"
+          fi
+
+  jurisdiction-cut-gates:
+    name: Feature P jurisdiction cut sequencing
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Refuse to ship a backend that depends on the jurisdiction facet
+      # unless the cut has at least been proposed. This catches the case
+      # where backend code lands ahead of the contracts wave by mistake.
+      - name: Require jurisdiction_cut_proposed.json before facet-aware deploys
+        run: |
+          set -euo pipefail
+          REFS=$(grep -rln "JurisdictionPolicyFacet\|jurisdictionFacet\|BACKEND_JURISDICTION_FACET_ADDRESS" \
+            backend/src/ 2>/dev/null || true)
+          if [ -z "$REFS" ]; then
+            echo "OK: backend does not yet reference the jurisdiction facet; gate inert."
+            exit 0
+          fi
+          if [ ! -f contracts/script/jurisdiction_cut_proposed.json ]; then
+            echo "FAIL: backend references JurisdictionPolicyFacet but contracts/script/jurisdiction_cut_proposed.json is missing." >&2
+            echo "      Feature P requires Diamond cut propose; run:" >&2
+            echo "        forge script ProposeJurisdictionFacetCut.s.sol --broadcast" >&2
+            echo "      Then commit the resulting jurisdiction_cut_proposed.json." >&2
+            exit 1
+          fi
+          echo "OK: jurisdiction_cut_proposed.json present (cut proposed)."
+
+      # The env-set guard: if BACKEND_JURISDICTION_FACET_ADDRESS is non-empty
+      # in the committed .env.example or .env.production samples, the cut
+      # must have been EXECUTED (48h timelock elapsed).
+      - name: Refuse BACKEND_JURISDICTION_FACET_ADDRESS without executed cut
+        run: |
+          set -euo pipefail
+          # Scan committed sample envs only; real .env files are never
+          # committed and never tracked.
+          SAMPLES="$(find . -maxdepth 4 -type f \( -name '.env.example' -o -name '.env.production' -o -name '.env.staging' \) 2>/dev/null || true)"
+          BAD=""
+          for f in $SAMPLES; do
+            # Match a non-empty value (anything after = that isn't whitespace).
+            if grep -E '^BACKEND_JURISDICTION_FACET_ADDRESS=[[:space:]]*[^[:space:]]' "$f" >/dev/null 2>&1; then
+              BAD="$BAD $f"
+            fi
+          done
+          if [ -n "$BAD" ]; then
+            if [ ! -f contracts/script/jurisdiction_cut_executed.json ]; then
+              echo "FAIL: BACKEND_JURISDICTION_FACET_ADDRESS is set in:$BAD" >&2
+              echo "      but contracts/script/jurisdiction_cut_executed.json is missing." >&2
+              echo "      Wait for the 48h Diamond timelock and run:" >&2
+              echo "        forge script ExecuteJurisdictionFacetCut.s.sol --broadcast" >&2
+              exit 1
+            fi
+          fi
+          echo "OK: jurisdiction facet env / cut-execute invariant holds."
+
+  web-bundle-size:
+    name: Web bundle size guard (< 800 KB gzipped)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install web deps
+        working-directory: web
+        run: bun install --frozen-lockfile
+
+      - name: Build web
+        working-directory: web
+        env:
+          NODE_ENV: production
+          VITE_BACKEND_FX_ENABLED: 'true'
+        run: bun run build
+
+      - name: Assert gzipped JS bundle < 800 KB
+        working-directory: web
+        run: |
+          set -euo pipefail
+          # Cover both Vite (dist/assets) and Nitro (.output/public) layouts.
+          ROOTS=""
+          [ -d dist ] && ROOTS="$ROOTS dist"
+          [ -d .output/public ] && ROOTS="$ROOTS .output/public"
+          if [ -z "$ROOTS" ]; then
+            echo "FAIL: no build output found (dist/ and .output/public/ both missing)." >&2
+            exit 1
+          fi
+          TOTAL=0
+          while IFS= read -r f; do
+            # gzip -c writes to stdout; wc -c gives compressed byte count.
+            SIZE=$(gzip -c "$f" | wc -c | tr -d ' ')
+            TOTAL=$((TOTAL + SIZE))
+          done < <(find $ROOTS -type f -name '*.js')
+          TOTAL_KB=$((TOTAL / 1024))
+          LIMIT_KB=800
+          echo "### Web JS bundle (gzipped)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Metric | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Size (KB gzipped) | ${TOTAL_KB} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Limit (KB gzipped) | ${LIMIT_KB} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "Total JS gzipped: ${TOTAL_KB} KB (limit ${LIMIT_KB} KB)"
+          if [ "$TOTAL_KB" -gt "$LIMIT_KB" ]; then
+            echo "FAIL: bundle is ${TOTAL_KB} KB gzipped; limit is ${LIMIT_KB} KB" >&2
+            exit 1
+          fi

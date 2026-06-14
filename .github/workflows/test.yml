@@ -1,0 +1,96 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FOUNDRY_PROFILE: ci
+
+jobs:
+  forge-test:
+    name: Forge build, test, coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+          cache: true
+
+      - name: Show forge version
+        run: forge --version
+
+      - name: Forge build with size check
+        id: build
+        run: |
+          set -o pipefail
+          forge build --sizes 2>&1 | tee build.log
+
+      - name: Forge format check
+        run: forge fmt --check
+        continue-on-error: true
+
+      - name: Forge test
+        id: test
+        env:
+          NO_COLOR: 1
+        run: |
+          set -o pipefail
+          forge test -vvv 2>&1 | tee test.log
+          TESTS_PASSED=$(grep -oE '[0-9]+ passed' test.log | tail -n 1 | grep -oE '[0-9]+' || echo 0)
+          TESTS_FAILED=$(grep -oE '[0-9]+ failed' test.log | tail -n 1 | grep -oE '[0-9]+' || echo 0)
+          TESTS_SKIPPED=$(grep -oE '[0-9]+ skipped' test.log | tail -n 1 | grep -oE '[0-9]+' || echo 0)
+          {
+            echo "### Forge test results"
+            echo ""
+            echo "| Passed | Failed | Skipped |"
+            echo "|--------|--------|---------|"
+            echo "| ${TESTS_PASSED} | ${TESTS_FAILED} | ${TESTS_SKIPPED} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Forge coverage (summary)
+        id: coverage
+        continue-on-error: true
+        env:
+          NO_COLOR: 1
+        run: |
+          set -o pipefail
+          forge coverage --report summary --no-match-coverage "(test|script|mocks)" 2>&1 | tee coverage.log
+          {
+            echo ""
+            echo "### Forge coverage"
+            echo ""
+            echo '```'
+            tail -n 60 coverage.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload build and test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: forge-logs
+          path: |
+            contracts/build.log
+            contracts/test.log
+            contracts/coverage.log
+          if-no-files-found: ignore
