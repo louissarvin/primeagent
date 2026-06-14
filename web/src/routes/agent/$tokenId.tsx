@@ -79,41 +79,64 @@ export const Route = createFileRoute('/agent/$tokenId')({
 
 /**
  * Resolve vault address for the given tokenId.
- * Reads from sessionStorage (set at mint time). Returns null if not cached.
+ *
+ * Order of attempts: URL query param -> sessionStorage cache -> on-chain
+ * AgentDeployed event read. Every candidate is verified by checking that
+ * the address has bytecode. This prevents stale or hand-crafted values
+ * (e.g. the owner EOA mistakenly written to sessionStorage by an older
+ * mint flow) from being used as the vault, which would cause every
+ * USDC approve/deposit to fail at gas estimation against a non-contract.
  */
 function useVaultAddress(tokenId: string): Address | null {
   const [vaultAddress, setVaultAddress] = useState<Address | null>(null)
-  // Public client for Arb Sepolia so we can read AgentDeployed event when
-  // sessionStorage is empty (e.g. user opened the dashboard in a fresh tab).
   const publicClient = usePublicClient({ chainId: arbitrumSepolia.id })
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const key = vaultSessionKey(tokenId)
-
-    // 1. URL query param ?vault=0x...
-    const params = new URLSearchParams(window.location.search)
-    const fromUrl = params.get('vault')
-    if (fromUrl && /^0x[0-9a-fA-F]{40}$/.test(fromUrl)) {
-      sessionStorage.setItem(key, fromUrl)
-      setVaultAddress(fromUrl as Address)
-      return
-    }
-
-    // 2. SessionStorage (set at mint time, via URL param above, or by step 3).
-    const stored = sessionStorage.getItem(key)
-    if (stored && /^0x[0-9a-fA-F]{40}$/.test(stored)) {
-      setVaultAddress(stored as Address)
-      return
-    }
-
-    // 3. Fall back to reading AgentDeployed event from Arb Sepolia. The
-    //    Factory has no `tokenIdToVault(uint256)` view, so we scan the
-    //    indexed event. Uses the RPC bloom filter so this is fast even with
-    //    fromBlock: 'earliest'.
     if (!publicClient) return
+    const key = vaultSessionKey(tokenId)
     let cancelled = false
+
+    const isAddress = (v: string | null | undefined): v is `0x${string}` =>
+      !!v && /^0x[0-9a-fA-F]{40}$/.test(v)
+
+    // True if `addr` has runtime bytecode on Arb Sepolia. Vaults must be
+    // contracts; EOAs return undefined or '0x' here.
+    const isContract = async (addr: `0x${string}`): Promise<boolean> => {
+      try {
+        const code = await publicClient.getCode({ address: addr })
+        return !!code && code !== '0x'
+      } catch {
+        return false
+      }
+    }
+
     void (async () => {
+      // 1. URL query param ?vault=0x...
+      const params = new URLSearchParams(window.location.search)
+      const fromUrl = params.get('vault')
+      if (isAddress(fromUrl) && await isContract(fromUrl)) {
+        if (cancelled) return
+        sessionStorage.setItem(key, fromUrl)
+        setVaultAddress(fromUrl)
+        return
+      }
+
+      // 2. SessionStorage cache. Evict if it is not a deployed contract;
+      //    older mint flows could write the owner EOA here by mistake.
+      const stored = sessionStorage.getItem(key)
+      if (isAddress(stored)) {
+        if (await isContract(stored)) {
+          if (cancelled) return
+          setVaultAddress(stored)
+          return
+        }
+        sessionStorage.removeItem(key)
+      }
+
+      // 3. On-chain AgentDeployed event. The Factory has no
+      //    `tokenIdToVault(uint256)` view, so we scan the indexed event.
+      //    `vault` is the first non-indexed param in `data`; viem decodes it.
       try {
         const logs = await publicClient.getContractEvents({
           address: CONTRACTS.Factory,
@@ -126,14 +149,16 @@ function useVaultAddress(tokenId: string): Address | null {
         if (cancelled) return
         const first = logs[0]
         const vault = (first?.args as { vault?: string } | undefined)?.vault
-        if (vault && /^0x[0-9a-fA-F]{40}$/.test(vault)) {
+        if (isAddress(vault) && await isContract(vault)) {
+          if (cancelled) return
           sessionStorage.setItem(key, vault)
-          setVaultAddress(vault as Address)
+          setVaultAddress(vault)
         }
       } catch {
         // RPC failure or no events found. Keep null; UI handles gracefully.
       }
     })()
+
     return () => { cancelled = true }
   }, [tokenId, publicClient])
 

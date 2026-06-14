@@ -17,10 +17,10 @@
  */
 
 import { useState, useEffect } from 'react'
-import { useAccount, useChainId, useSwitchChain, useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi'
+import { useAccount, useChainId, usePublicClient, useSimulateContract, useSwitchChain, useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi'
 import { arbitrumSepolia } from 'wagmi/chains'
 import { AlertTriangle } from 'lucide-react'
-import { parseUnits, formatUnits } from 'viem'
+import { BaseError, parseUnits, formatUnits } from 'viem'
 import { z } from 'zod'
 import { Loader2, X, CheckCircle2 } from 'lucide-react'
 import { cnm } from '@/utils/style'
@@ -45,27 +45,70 @@ interface DepositPanelProps {
 type Step = 'idle' | 'approve-pending' | 'approve-confirming' | 'deposit-pending' | 'deposit-confirming' | 'done'
 
 function parseRevertMsg(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err)
-  if (raw.includes('User rejected') || raw.includes('user rejected')) {
+  // Prefer viem's curated short message; it strips the verbose context that
+  // makes raw Error.message useless for end users.
+  let raw = ''
+  if (err instanceof BaseError) {
+    raw = err.shortMessage || err.message || String(err)
+    const walked = err.walk?.((e) => 'shortMessage' in (e as object))
+    if (walked && walked instanceof BaseError && walked.shortMessage) {
+      raw = walked.shortMessage
+    }
+  } else if (err instanceof Error) {
+    raw = err.message
+  } else {
+    raw = String(err)
+  }
+
+  if (/user rejected|user denied/i.test(raw)) {
     return 'Transaction rejected in wallet.'
   }
-  if (raw.includes('insufficient allowance') || raw.includes('ERC20InsufficientAllowance')) {
-    return 'Allowance too low. Approve USDC first.'
+  if (/insufficient allowance|ERC20InsufficientAllowance/i.test(raw)) {
+    return 'USDC allowance too low. Approve again before depositing.'
   }
-  if (raw.includes('paused')) {
+  if (/paused|EnforcedPause/i.test(raw)) {
     return 'Vault is paused. Contact support.'
   }
-  return raw.length > 160 ? 'Transaction failed. Check your wallet and try again.' : raw
+  if (/insufficient funds for gas/i.test(raw)) {
+    return 'Not enough ETH on Arbitrum Sepolia to pay for gas.'
+  }
+  if (/chain mismatch|switch chain/i.test(raw)) {
+    return 'Wallet is on the wrong network. Switch to Arbitrum Sepolia.'
+  }
+  // Keep the message short enough to render in the panel without truncating
+  // the actionable part. Anything beyond ~200 chars is viem boilerplate.
+  return raw.length > 200 ? `${raw.slice(0, 200)}…` : raw
 }
 
 export default function DepositPanel({ vaultAddress, onClose, onSuccess }: DepositPanelProps) {
   const { address } = useAccount()
   const chainId = useChainId()
   const { switchChainAsync } = useSwitchChain()
+  const publicClient = usePublicClient({ chainId: CHAIN })
   const onWrongChain = chainId !== CHAIN
   const [amount, setAmount] = useState('')
   const [step, setStep] = useState<Step>('idle')
   const [error, setError] = useState<string | null>(null)
+  // Defence in depth: if the vault prop is not a deployed contract, every
+  // approve/deposit would revert silently against MetaMask. Verify once on
+  // mount and refuse to transact when bytecode is absent.
+  const [vaultIsContract, setVaultIsContract] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    if (!publicClient) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const code = await publicClient.getCode({ address: vaultAddress })
+        if (cancelled) return
+        setVaultIsContract(!!code && code !== '0x')
+      } catch {
+        if (cancelled) return
+        setVaultIsContract(null)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [publicClient, vaultAddress])
 
   const handleSwitchChain = async () => {
     try {
@@ -102,8 +145,65 @@ export default function DepositPanel({ vaultAddress, onClose, onSuccess }: Depos
   const needsApprove = amountWei > 0n && (allowance ?? 0n) < amountWei
   const exceedsBalance = amountWei > 0n && usdcBalance !== undefined && amountWei > usdcBalance
 
-  // Write hook (single instance, reused for both approve and deposit).
-  const { writeContract, data: txHash } = useWriteContract()
+  // Fetch current EIP-1559 fees from the chain and add a safety buffer.
+  // MetaMask's default suggestion on Arbitrum Sepolia is the raw
+  // `eth_gasPrice` value (~20_000_000 wei), which sits at or slightly
+  // below the current base fee. Even a 1-block tick pushes the base fee
+  // past the wallet's maxFeePerGas and the sequencer rejects the tx with
+  // "max fee per gas less than block base fee". We override both fields
+  // with `max(estimate, gasPrice) * 3` so the tx survives a few blocks
+  // of base-fee growth without overpaying meaningfully on a testnet.
+  async function fetchFeeOverrides(): Promise<{
+    maxFeePerGas: bigint
+    maxPriorityFeePerGas: bigint
+  } | null> {
+    if (!publicClient) return null
+    try {
+      const [fees, gasPrice] = await Promise.all([
+        publicClient.estimateFeesPerGas().catch(() => null),
+        publicClient.getGasPrice().catch(() => null),
+      ])
+      const floor = gasPrice ?? 0n
+      const suggested = fees?.maxFeePerGas ?? floor
+      const baseMax = suggested > floor ? suggested : floor
+      if (baseMax === 0n) return null
+      const maxFeePerGas = baseMax * 3n
+      // Arbitrum has no real priority-fee market; viem returns a small or
+      // zero value. Mirror it but never let it exceed maxFeePerGas.
+      const tip = fees?.maxPriorityFeePerGas ?? 0n
+      const maxPriorityFeePerGas = tip > maxFeePerGas ? maxFeePerGas : tip
+      return { maxFeePerGas, maxPriorityFeePerGas }
+    } catch {
+      return null
+    }
+  }
+
+  // Preflight: simulate the deposit before the user signs. If the on-chain
+  // simulation reverts (vault paused, allowance just got front-run, asset
+  // mismatch, etc.) we surface a concrete reason instead of letting the
+  // wallet show a generic "Transaction failed" badge.
+  const depositReady =
+    !!address &&
+    amountWei > 0n &&
+    !exceedsBalance &&
+    !onWrongChain &&
+    vaultIsContract !== false &&
+    (allowance ?? 0n) >= amountWei
+
+  const depositSim = useSimulateContract({
+    address: vaultAddress,
+    abi: vaultAbi,
+    functionName: 'deposit',
+    args: address ? [amountWei, address] : undefined,
+    account: address,
+    chainId: CHAIN,
+    query: { enabled: depositReady },
+  })
+
+  // Write hook (single instance, reused for both approve and deposit). We
+  // `reset()` between the approve and the deposit so the deposit submission
+  // never reads a stale `data`/`error` from the approve write.
+  const { writeContract, reset: resetWrite, data: txHash } = useWriteContract()
 
   // Wait for approve tx.
   const approveTx = useWaitForTransactionReceipt({
@@ -128,8 +228,16 @@ export default function DepositPanel({ vaultAddress, onClose, onSuccess }: Depos
       setStep('idle')
       return
     }
-    void refetchAllowance()
-    runDeposit()
+    // Refetch allowance before deposit so the on-chain state is observed
+    // by the next read; the deposit itself is gated by the just-confirmed
+    // approve receipt, so it is safe to proceed even if the read is slow.
+    // Clear the write hook's state too so the deposit submission cannot
+    // inherit the prior approve's hash/error from the shared instance.
+    void (async () => {
+      try { await refetchAllowance() } catch { /* tolerate RPC lag */ }
+      resetWrite()
+      await runDeposit()
+    })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [approveTx.data, step])
 
@@ -145,9 +253,10 @@ export default function DepositPanel({ vaultAddress, onClose, onSuccess }: Depos
     setStep('done')
   }, [depositTx.data, step])
 
-  function runDeposit() {
+  async function runDeposit() {
     if (!address) return
     setStep('deposit-pending')
+    const fees = await fetchFeeOverrides()
     writeContract(
       {
         address: vaultAddress,
@@ -155,6 +264,7 @@ export default function DepositPanel({ vaultAddress, onClose, onSuccess }: Depos
         functionName: 'deposit',
         args: [amountWei, address],
         chainId: CHAIN,
+        ...(fees ?? {}),
       },
       {
         onSuccess() {
@@ -168,12 +278,33 @@ export default function DepositPanel({ vaultAddress, onClose, onSuccess }: Depos
     )
   }
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!address || !parsed.success || exceedsBalance) return
     setError(null)
 
+    if (vaultIsContract === false) {
+      setError(
+        'Vault address is not a deployed contract. Refresh the page so the dashboard can re-resolve the vault from the AgentDeployed event.',
+      )
+      return
+    }
+
+    // Hard gate: the vault and mock USDC only exist on Arbitrum Sepolia.
+    // Sending a tx on any other chain reverts at the RPC and surfaces as
+    // "Transaction failed" in the wallet. Try to switch first; if that
+    // fails or is rejected, refuse to submit.
+    if (onWrongChain) {
+      try {
+        await switchChainAsync({ chainId: CHAIN })
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Switch to Arbitrum Sepolia to deposit.')
+        return
+      }
+    }
+
     if (needsApprove) {
       setStep('approve-pending')
+      const fees = await fetchFeeOverrides()
       writeContract(
         {
           address: CONTRACTS.USDC,
@@ -181,6 +312,7 @@ export default function DepositPanel({ vaultAddress, onClose, onSuccess }: Depos
           functionName: 'approve',
           args: [vaultAddress, amountWei],
           chainId: CHAIN,
+          ...(fees ?? {}),
         },
         {
           onSuccess() {
@@ -193,7 +325,7 @@ export default function DepositPanel({ vaultAddress, onClose, onSuccess }: Depos
         },
       )
     } else {
-      runDeposit()
+      await runDeposit()
     }
   }
 
@@ -297,7 +429,16 @@ export default function DepositPanel({ vaultAddress, onClose, onSuccess }: Depos
       )}
 
       {error && (
-        <p className="text-xs text-down leading-relaxed">{error}</p>
+        <p className="text-xs text-down leading-relaxed break-words">{error}</p>
+      )}
+
+      {/* Surface deposit preflight failures inline so the user sees the
+          actual revert reason before they spend gas. Only show when there
+          is no live wallet error already on screen. */}
+      {!error && depositReady && depositSim.error && (
+        <p className="text-xs text-down leading-relaxed break-words">
+          {parseRevertMsg(depositSim.error)}
+        </p>
       )}
 
       {/* Step progress */}
@@ -326,8 +467,20 @@ export default function DepositPanel({ vaultAddress, onClose, onSuccess }: Depos
 
       <button
         type="button"
-        onClick={handleSubmit}
-        disabled={isBusy || !parsed.success || exceedsBalance || !address || amountWei === 0n}
+        onClick={() => { void handleSubmit() }}
+        disabled={
+          isBusy
+          || !parsed.success
+          || exceedsBalance
+          || !address
+          || amountWei === 0n
+          || onWrongChain
+          || vaultIsContract === false
+          // Only block on simulation when no approval is still needed.
+          // If allowance is too low, the simulation will (correctly)
+          // revert; the user should still be allowed to click Approve.
+          || (!needsApprove && depositReady && !!depositSim.error)
+        }
         className={cnm(
           'w-full flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-sm font-semibold',
           'bg-brand text-canvas hover:opacity-85 transition-opacity duration-100',
@@ -343,6 +496,8 @@ export default function DepositPanel({ vaultAddress, onClose, onSuccess }: Depos
             {step === 'deposit-pending' && 'Confirm deposit…'}
             {step === 'deposit-confirming' && 'Depositing…'}
           </>
+        ) : onWrongChain ? (
+          'Switch to Arbitrum Sepolia'
         ) : needsApprove ? (
           'Approve & Deposit'
         ) : (
